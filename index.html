@@ -92,6 +92,15 @@ h1{font-size:clamp(27px,4vw,38px);letter-spacing:-1.3px;line-height:1.15;margin:
 .ghost{margin-left:auto;border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 12px;font-size:12px;color:var(--navy)}
 .doc{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin:8px 0;font-size:13px}
 .doc small{color:var(--muted);display:block}
+.tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:0 0 10px}
+.tool{text-align:left;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.tool:hover{border-color:var(--teal);background:var(--teal-light)}
+.tool strong{display:block;color:var(--navy);font-size:14px;margin-bottom:4px}
+.tool span{color:var(--muted);font-size:12px}
+.mback{position:fixed;inset:0;background:rgba(15,40,55,.5);display:none;align-items:center;justify-content:center;padding:16px;z-index:50}
+.mback.show{display:flex}
+.modal{background:#fff;border-radius:16px;padding:22px;width:min(520px,100%);max-height:90vh;overflow:auto}
+.modal h3{color:var(--navy);margin-bottom:4px}.modal label{display:block;font-size:12px;font-weight:600;color:var(--navy);margin-top:10px}
 </style>
 </head>
 <body>
@@ -231,7 +240,7 @@ async function send(text){
     const d=await r.json().catch(()=>({}));
     if(!r.ok)throw new Error(d.error||'The AI request could not be completed.');
     history.push({role:'assistant',content:d.reply});
-    pend.forEach(p=>p.textContent=d.reply);
+    pend.forEach(p=>p.textContent=d.reply.trim());
   }catch(e){
     history.pop();
     pend.forEach(p=>p.textContent='Could not get a reply: '+e.message);
@@ -245,18 +254,51 @@ const nc=document.createElement('button');nc.type='button';nc.className='ghost';
 nc.addEventListener('click',()=>{if(busy)return;history=[];store.set('phlight_chat',[]);render()});
 $('chatFull').parentElement.querySelector('.chat-head').appendChild(nc);
 
-const quick={
- qa:[['Feedback from notes','Turn these observation notes into specific, objective, actionable feedback for the teacher:\n\n'],['Audit notes','Help me structure evidence-based audit notes for a lesson about: '],['Evaluation criteria','List clear evaluation criteria for auditing a 25-minute ESL lesson.']],
- operations:[['Announcement','Draft a clear internal announcement about: '],['Incident report','Write an incident report from these details:\n\n'],['Make an SOP','Turn this process into a clear step-by-step SOP:\n\n']],
- hr:[['Attendance reminder','Draft a polite message reminding staff about attendance and notification procedures.'],['Welcome message','Write a warm onboarding welcome message for a new teacher.'],['Sensitive message','Help me phrase a sensitive workplace message about: ']],
- training:[['Coaching plan','Create a 30-minute coaching plan for a new teacher who is struggling with: '],['Training activity','Design a short training activity on: '],['Feedback talk','Write a guide for a feedback conversation with a teacher after an observation.']]
+const tools={
+ qa:[
+  {n:'Teacher feedback',d:'Turn observation notes into clear feedback',intro:'Write warm, specific, actionable feedback for a teacher after a lesson observation.',f:[['Lesson topic','text'],['What went well','area'],['What to improve','area'],['Other notes','area']],end:'Structure: strengths, 2-3 focus areas with concrete next steps, then encouragement.'},
+  {n:'Lesson audit summary',d:'Summarize audit evidence objectively',intro:'Summarize this lesson audit objectively, using only the evidence given.',f:[['Lesson or class','text'],['Evidence observed','area'],['Criteria checked','text']],end:'Give findings, a suggested rating (Meets / Partly meets / Needs support) with reasons, and recommended actions.'},
+  {n:'Evaluation rubric',d:'Build a rubric for auditing lessons',intro:'Create a clear evaluation rubric for auditing an ESL lesson.',f:[['Lesson type','text'],['Lesson length','text']],end:'Use 4-5 criteria with short descriptors for 3 performance levels.'}],
+ operations:[
+  {n:'Announcement',d:'Draft a clear staff announcement',intro:'Draft an internal announcement.',f:[['Topic','text'],['Audience','text'],['Key details','area'],['Tone (friendly, formal)','text']],end:'Keep it short and clear, with a subject line.'},
+  {n:'Incident report',d:'Write a factual incident report',intro:'Write an incident report using only the facts given.',f:[['What happened','area'],['When and where','text'],['Roles involved','text'],['Action taken','area']],end:'Use sections: summary, timeline, impact, action taken, follow-up.'},
+  {n:'Make an SOP',d:'Turn a process into steps',intro:'Turn this process into a standard operating procedure.',f:[['Process name','text'],['Steps as you know them','area'],['Who is responsible','text']],end:'Write numbered steps and a short checklist at the end.'}],
+ hr:[
+  {n:'Staff message',d:'Write a clear message to staff',intro:'Write a respectful, professional message to staff.',f:[['Purpose','text'],['Key points','area'],['Tone','text']],end:'Keep it concise and kind.'},
+  {n:'Welcome message',d:'Warm onboarding note for a new hire',intro:'Write a warm onboarding welcome message for a new team member.',f:[['Name or role','text'],['Start date','text'],['First-week details','area']],end:'Make it encouraging and easy to read.'},
+  {n:'Sensitive message',d:'Careful wording for a hard topic',intro:'Help me word a sensitive workplace message with calm, respectful language.',f:[['Situation','area'],['Goal of the message','text']],end:'Do not assume facts that were not given. Suggest involving HR if the matter is serious.'}],
+ training:[
+  {n:'Coaching plan',d:'Plan a coaching session',intro:'Create a coaching plan for a teacher.',f:[["Teacher's challenge",'area'],['Session length','text'],['Experience level','text']],end:'Give goals, activities, and a follow-up check.'},
+  {n:'Training activity',d:'Design a short activity',intro:'Design a short training activity.',f:[['Topic','text'],['Group size','text'],['Duration','text']],end:'Include objective, materials, steps, and a quick check for understanding.'},
+  {n:'Feedback talk guide',d:'Guide for a feedback conversation',intro:'Write a guide for a feedback conversation with a teacher.',f:[['Situation','area'],["Teacher's strengths",'area']],end:'Provide an opening, key questions, how to phrase the feedback, and a closing.'}]
 };
-Object.keys(quick).forEach(k=>{
-  const wrap=document.createElement('div');wrap.className='chips';
-  quick[k].forEach(([l,p])=>{const b=document.createElement('button');b.type='button';b.className='chip';b.textContent=l;
-    b.addEventListener('click',()=>{showPage('assistant');const i=$('inputFull');i.value=p;i.focus()});wrap.appendChild(b)});
-  const sec=$(k),head=sec.querySelector('.page-intro');
-  const t=document.createElement('div');t.className='section-head';t.innerHTML='<h2>Quick tasks</h2><span>Opens the assistant with a starter</span>';
+const mb=document.createElement('div');mb.className='mback';document.body.appendChild(mb);
+mb.addEventListener('click',e=>{if(e.target===mb)mb.classList.remove('show')});
+function openTool(t){
+  mb.textContent='';const m=document.createElement('div');m.className='modal';
+  const h3=document.createElement('h3');h3.textContent=t.n;const dd=document.createElement('p');dd.textContent=t.d;dd.style.cssText='font-size:12px;color:var(--muted)';
+  m.append(h3,dd);const inputs=[];
+  t.f.forEach(([l,ty])=>{const lb=document.createElement('label');lb.textContent=l;const el=document.createElement(ty==='area'?'textarea':'input');el.className='field';if(ty==='area')el.rows=3;m.append(lb,el);inputs.push([l,el])});
+  const msg=document.createElement('p');msg.style.cssText='font-size:12px;color:#b3261e;margin-top:6px';
+  const row=document.createElement('div');row.className='row';
+  const go=document.createElement('button');go.type='button';go.className='send pad';go.textContent='Generate with assistant';
+  const cx=document.createElement('button');cx.type='button';cx.className='ghost';cx.style.marginLeft='0';cx.textContent='Cancel';
+  cx.addEventListener('click',()=>mb.classList.remove('show'));
+  go.addEventListener('click',()=>{
+    const lines=inputs.filter(([l,el])=>el.value.trim()).map(([l,el])=>l+': '+el.value.trim());
+    if(!lines.length){msg.textContent='Please fill in at least one field.';return}
+    mb.classList.remove('show');showPage('assistant');
+    send(t.intro+'\n'+lines.join('\n')+'\n'+t.end);
+  });
+  row.append(go,cx);m.append(msg,row);mb.appendChild(m);mb.classList.add('show');
+}
+Object.keys(tools).forEach(k=>{
+  const wrap=document.createElement('div');wrap.className='tools';
+  tools[k].forEach(t=>{const b=document.createElement('button');b.type='button';b.className='tool';
+    const a=document.createElement('strong');a.textContent=t.n;const c=document.createElement('span');c.textContent=t.d;b.append(a,c);
+    b.addEventListener('click',()=>openTool(t));wrap.appendChild(b)});
+  const head=$(k).querySelector('.page-intro');
+  const t=document.createElement('div');t.className='section-head';t.innerHTML='<h2>Tools</h2><span>Fill in a short form, the assistant does the writing</span>';
   head.after(wrap);head.after(t);
 });
 
@@ -286,6 +328,34 @@ $('kbAdd').addEventListener('click',()=>{
   msg.textContent=text.length>8000?'Saved. Only the first 8,000 characters are used by the assistant.':'Saved.';
   renderKB();
 });
+(function(){
+ const box=document.createElement('div');box.className='info-box';box.style.marginTop='18px';
+ const lb='font-size:12px;font-weight:600;color:var(--navy);display:block;margin-top:10px';
+ box.innerHTML='<h3>Lesson audit check</h3><p style="font-size:12px;color:var(--muted)">Compares a filled audit sheet with the lesson recording and suggests which ratings to keep, raise or lower. A person makes the final decision.</p>'+
+ '<label style="'+lb+'">Audit sheet: paste from Google Sheets, or choose a .csv file</label><textarea id="auSheet" class="field" rows="6"></textarea><input type="file" id="auSheetFile" accept=".csv,.txt">'+
+ '<label style="'+lb+'">Video: unlisted YouTube link (best for 25-minute lessons)</label><input id="auLink" class="field" placeholder="https://www.youtube.com/watch?v=...">'+
+ '<label style="'+lb+'">Or a small video file (up to 25 MB)</label><input type="file" id="auVideo" accept="video/mp4,video/webm,video/quicktime">'+
+ '<div class="row"><button class="send pad" id="auGo" type="button">Check the audit</button></div><p id="auMsg" style="font-size:12px;margin-top:8px"></p><div id="auOut" style="white-space:pre-wrap;font-size:13px;line-height:1.6"></div>';
+ $('qa').appendChild(box);
+ const rd=(f,m)=>new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;m?r.readAsDataURL(f):r.readAsText(f)});
+ $('auSheetFile').addEventListener('change',async e=>{const f=e.target.files[0];if(f)$('auSheet').value=await rd(f,false)});
+ $('auGo').addEventListener('click',async()=>{
+  const sheet=$('auSheet').value.trim(),link=$('auLink').value.trim(),file=$('auVideo').files[0],msg=$('auMsg'),out=$('auOut'),btn=$('auGo');
+  if(!sheet){msg.textContent='Please add the audit sheet.';return}
+  if(!link&&!file){msg.textContent='Please add a YouTube link or a video file.';return}
+  if(link&&!/youtube\.com|youtu\.be/.test(link)){msg.textContent='Please use a YouTube link, or upload a small video file instead.';return}
+  if(!link&&file.size>25*1024*1024){msg.textContent='That file is too large. Please use an unlisted YouTube link.';return}
+  btn.disabled=true;out.textContent='';msg.textContent='Analyzing the lesson. This can take a few minutes…';
+  try{
+   const payload={sheet:sheet,videoUrl:link||undefined,videoData:link?undefined:await rd(file,true)};
+   const r=await fetch('/api/audit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+   const d=await r.json().catch(()=>({}));
+   if(!r.ok)throw new Error(d.error||'The check could not be completed.');
+   msg.textContent='Done. Check each suggestion against its timestamp before changing a rating.';out.textContent=d.reply.trim();
+  }catch(e){msg.textContent='Could not finish: '+e.message}
+  btn.disabled=false;
+ });
+})();
 render();renderKB();
 </script>
 </body>
