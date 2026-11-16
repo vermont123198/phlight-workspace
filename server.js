@@ -7,6 +7,8 @@ const path = require("node:path");
 const PORT = Number(process.env.PORT || 3000);
 const API_KEY = process.env.OPENROUTER_API_KEY;
 const MODEL = process.env.OPENROUTER_MODEL || "openrouter/free";
+const VIDEO_MODEL = process.env.OPENROUTER_VIDEO_MODEL || "google/gemini-2.5-flash";
+const AUDIT_PROMPT = "You are a quality assurance second reader for ESL lesson audits. You receive the auditor's filled audit sheet and a recording of the lesson. For EACH criterion on the sheet give: the criterion name; the auditor's rating; your suggested rating (Keep, Higher, Lower, or Cannot determine); the evidence from the recording with approximate timestamps (mm:ss); and your confidence (High, Medium, Low). Use only what is visible or audible in the recording. If something is unclear or not observable, say Cannot determine. Never invent quotes or timestamps. Finish with a short summary of which ratings should change and why, and remind the reader that the human auditor makes the final decision. Reply in plain text only, without markdown symbols.";
 const ROOT = __dirname;
 
 const server = http.createServer(async (req, res) => {
@@ -18,6 +20,40 @@ const server = http.createServer(async (req, res) => {
     if ((req.headers.authorization || "") !== expected) {
       res.writeHead(401, { "WWW-Authenticate": 'Basic realm="Phlight"' });
       return res.end("Login required");
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/audit") {
+    if (!API_KEY) return sendJson(res, 500, { error: "OPENROUTER_API_KEY is not configured on the server." });
+    try {
+      const body = await readJson(req, 45_000_000);
+      const sheet = String(body.sheet || "").slice(0, 20000);
+      const video = String(body.videoUrl || body.videoData || "");
+      if (!sheet.trim() || !video) return sendJson(res, 400, { error: "Please provide the audit sheet and a video." });
+      if (!video.startsWith("https://") && !video.startsWith("data:video/")) return sendJson(res, 400, { error: "The video must be an https link or an uploaded video file." });
+      const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json", "X-OpenRouter-Title": "Phlight Global Inc. AI Workspace" },
+        body: JSON.stringify({
+          model: VIDEO_MODEL,
+          temperature: 0.2,
+          max_tokens: 3500,
+          messages: [
+            { role: "system", content: AUDIT_PROMPT },
+            { role: "user", content: [
+              { type: "text", text: "AUDIT SHEET (filled by the auditor):\n" + sheet },
+              { type: "video_url", video_url: { url: video } }
+            ] }
+          ]
+        })
+      });
+      const data = await upstream.json().catch(() => ({}));
+      if (!upstream.ok) return sendJson(res, upstream.status, { error: data?.error?.message || `OpenRouter returned HTTP ${upstream.status}.` });
+      const reply = data?.choices?.[0]?.message?.content;
+      if (!reply) return sendJson(res, 502, { error: "The model returned an empty response." });
+      return sendJson(res, 200, { reply });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message || "Unexpected server error." });
     }
   }
 
@@ -42,6 +78,7 @@ const server = http.createServer(async (req, res) => {
         content: [
           "You are Phlight Assistant, the internal AI assistant for Phlight Global Inc.",
           "Be professional, clear, practical, and concise.",
+          "Reply in plain text only. Do not use markdown symbols such as ** or #. For lists, use simple numbers or hyphens.",
           "Help with company operations, quality assurance, teaching support, training, HR guidance, and workplace communication.",
           "Do not invent company policies, records, or facts. If company-specific information is not supplied, say so and ask for the relevant approved document.",
           "Treat employee, student, and company information as confidential. Do not ask users to share passwords, API keys, or unnecessary sensitive personal information."
@@ -87,12 +124,12 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-function readJson(req) {
+function readJson(req, max = 1_000_000) {
   return new Promise((resolve, reject) => {
     let raw = "";
     req.on("data", chunk => {
       raw += chunk;
-      if (raw.length > 1_000_000) {
+      if (raw.length > max) {
         reject(new Error("Request is too large."));
         req.destroy();
       }
