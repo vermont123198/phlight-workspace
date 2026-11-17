@@ -9,6 +9,13 @@ const API_KEY = process.env.OPENROUTER_API_KEY;
 const MODEL = process.env.OPENROUTER_MODEL || "openrouter/free";
 const VIDEO_MODEL = process.env.OPENROUTER_VIDEO_MODEL || "google/gemini-2.5-flash";
 const AUDIT_PROMPT = "You are a quality assurance second reader for ESL lesson audits. You receive the auditor's filled audit sheet and a recording of the lesson. For EACH criterion on the sheet give: the criterion name; the auditor's rating; your suggested rating (Keep, Higher, Lower, or Cannot determine); the evidence from the recording with approximate timestamps (mm:ss); and your confidence (High, Medium, Low). Use only what is visible or audible in the recording. If something is unclear or not observable, say Cannot determine. Never invent quotes or timestamps. Finish with a short summary of which ratings should change and why, and remind the reader that the human auditor makes the final decision. Reply in plain text only, without markdown symbols.";
+const GEMINI_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
+const PLAN_PROMPT = "You are a quality assurance second reader. You receive a teacher's lesson plan and a recording of the lesson. Compare what was planned with what actually happened. Report: (1) for each objective, stage or activity in the plan: Done as planned, Done differently, Not seen, or Cannot determine, with the evidence and approximate timestamps (mm:ss) and your confidence (High, Medium, Low); (2) timing, planned versus actual per stage, when the plan gives times; (3) anything significant in the recording that was not in the plan; (4) a short summary of how closely the lesson followed the plan, with 2-3 strengths and 2-3 suggestions, in a warm and professional tone. Use only what is visible or audible in the recording. Never invent quotes or timestamps, and say Cannot determine when something is unclear. Remind the reader that a human reviewer should verify the findings. Reply in plain text only, without markdown symbols.";
+const VIDEO_ROUTES = {
+  "/api/audit": { field: "sheet", label: "AUDIT SHEET (filled by the auditor)", prompt: AUDIT_PROMPT },
+  "/api/plancheck": { field: "plan", label: "LESSON PLAN", prompt: PLAN_PROMPT }
+};
 const ROOT = __dirname;
 
 const server = http.createServer(async (req, res) => {
@@ -23,37 +30,19 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (req.method === "POST" && url.pathname === "/api/audit") {
-    if (!API_KEY) return sendJson(res, 500, { error: "OPENROUTER_API_KEY is not configured on the server." });
+  if (req.method === "POST" && VIDEO_ROUTES[url.pathname]) {
+    const cfg = VIDEO_ROUTES[url.pathname];
+    if (!GEMINI_KEY && !API_KEY) return sendJson(res, 500, { error: "No AI key is configured on the server." });
     try {
       const body = await readJson(req, 45_000_000);
-      const sheet = String(body.sheet || "").slice(0, 20000);
+      const text = String(body[cfg.field] || "").slice(0, 20000);
       const video = String(body.videoUrl || body.videoData || "");
-      if (!sheet.trim() || !video) return sendJson(res, 400, { error: "Please provide the audit sheet and a video." });
+      if (!text.trim() || !video) return sendJson(res, 400, { error: "Please provide the document text and a video." });
       if (!video.startsWith("https://") && !video.startsWith("data:video/")) return sendJson(res, 400, { error: "The video must be an https link or an uploaded video file." });
-      const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json", "X-OpenRouter-Title": "Phlight Global Inc. AI Workspace" },
-        body: JSON.stringify({
-          model: VIDEO_MODEL,
-          temperature: 0.2,
-          max_tokens: 3500,
-          messages: [
-            { role: "system", content: AUDIT_PROMPT },
-            { role: "user", content: [
-              { type: "text", text: "AUDIT SHEET (filled by the auditor):\n" + sheet },
-              { type: "video_url", video_url: { url: video } }
-            ] }
-          ]
-        })
-      });
-      const data = await upstream.json().catch(() => ({}));
-      if (!upstream.ok) return sendJson(res, upstream.status, { error: data?.error?.message || `OpenRouter returned HTTP ${upstream.status}.` });
-      const reply = data?.choices?.[0]?.message?.content;
-      if (!reply) return sendJson(res, 502, { error: "The model returned an empty response." });
+      const reply = await askVideo(cfg.prompt, cfg.label + ":\n" + text, video);
       return sendJson(res, 200, { reply });
     } catch (err) {
-      return sendJson(res, 500, { error: err.message || "Unexpected server error." });
+      return sendJson(res, err.status || 500, { error: err.message || "Unexpected server error." });
     }
   }
 
@@ -124,6 +113,44 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
+async function askVideo(system, text, video) {
+  const fail = (msg, status) => Object.assign(new Error(msg), { status });
+  if (GEMINI_KEY) {
+    const part = video.startsWith("data:")
+      ? { inlineData: { mimeType: video.slice(5, video.indexOf(";")), data: video.slice(video.indexOf(",") + 1) } }
+      : { fileData: { fileUri: video } };
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+      method: "POST",
+      headers: { "x-goog-api-key": GEMINI_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: "user", parts: [{ text }, part] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 8000 }
+      })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw fail(d?.error?.message || `Gemini returned HTTP ${r.status}.`, r.status === 401 || r.status === 403 ? 502 : r.status);
+    const out = (d?.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("");
+    if (!out) throw fail("The model returned an empty response.", 502);
+    return out;
+  }
+  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json", "X-OpenRouter-Title": "Phlight Global Inc. AI Workspace" },
+    body: JSON.stringify({
+      model: VIDEO_MODEL, temperature: 0.2, max_tokens: 3500,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: [{ type: "text", text }, { type: "video_url", video_url: { url: video } }] }
+      ]
+    })
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw fail(d?.error?.message || `OpenRouter returned HTTP ${r.status}.`, r.status);
+  const out = d?.choices?.[0]?.message?.content;
+  if (!out) throw fail("The model returned an empty response.", 502);
+  return out;
+}
 function readJson(req, max = 1_000_000) {
   return new Promise((resolve, reject) => {
     let raw = "";
