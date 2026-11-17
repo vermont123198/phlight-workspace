@@ -328,34 +328,36 @@ $('kbAdd').addEventListener('click',()=>{
   msg.textContent=text.length>8000?'Saved. Only the first 8,000 characters are used by the assistant.':'Saved.';
   renderKB();
 });
-(function(){
+function videoPanel(c){
  const box=document.createElement('div');box.className='info-box';box.style.marginTop='18px';
- const lb='font-size:12px;font-weight:600;color:var(--navy);display:block;margin-top:10px';
- box.innerHTML='<h3>Lesson audit check</h3><p style="font-size:12px;color:var(--muted)">Compares a filled audit sheet with the lesson recording and suggests which ratings to keep, raise or lower. A person makes the final decision.</p>'+
- '<label style="'+lb+'">Audit sheet: paste from Google Sheets, or choose a .csv file</label><textarea id="auSheet" class="field" rows="6"></textarea><input type="file" id="auSheetFile" accept=".csv,.txt">'+
- '<label style="'+lb+'">Video: unlisted YouTube link (best for 25-minute lessons)</label><input id="auLink" class="field" placeholder="https://www.youtube.com/watch?v=...">'+
- '<label style="'+lb+'">Or a small video file (up to 25 MB)</label><input type="file" id="auVideo" accept="video/mp4,video/webm,video/quicktime">'+
- '<div class="row"><button class="send pad" id="auGo" type="button">Check the audit</button></div><p id="auMsg" style="font-size:12px;margin-top:8px"></p><div id="auOut" style="white-space:pre-wrap;font-size:13px;line-height:1.6"></div>';
+ const lb='font-size:12px;font-weight:600;color:var(--navy);display:block;margin-top:10px',p=c.p;
+ box.innerHTML='<h3>'+c.title+'</h3><p style="font-size:12px;color:var(--muted)">'+c.intro+'</p>'+
+ '<label style="'+lb+'">'+c.label+'</label><textarea id="'+p+'T" class="field" rows="6"></textarea><input type="file" id="'+p+'F" accept=".csv,.txt">'+
+ '<label style="'+lb+'">Video: unlisted YouTube link (best for 25-minute lessons)</label><input id="'+p+'L" class="field" placeholder="https://www.youtube.com/watch?v=...">'+
+ '<label style="'+lb+'">Or a small video file (up to 25 MB)</label><input type="file" id="'+p+'V" accept="video/mp4,video/webm,video/quicktime">'+
+ '<div class="row"><button class="send pad" id="'+p+'G" type="button">'+c.btn+'</button></div><p id="'+p+'M" style="font-size:12px;margin-top:8px"></p><div id="'+p+'O" style="white-space:pre-wrap;font-size:13px;line-height:1.6"></div>';
  $('qa').appendChild(box);
  const rd=(f,m)=>new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;m?r.readAsDataURL(f):r.readAsText(f)});
- $('auSheetFile').addEventListener('change',async e=>{const f=e.target.files[0];if(f)$('auSheet').value=await rd(f,false)});
- $('auGo').addEventListener('click',async()=>{
-  const sheet=$('auSheet').value.trim(),link=$('auLink').value.trim(),file=$('auVideo').files[0],msg=$('auMsg'),out=$('auOut'),btn=$('auGo');
-  if(!sheet){msg.textContent='Please add the audit sheet.';return}
+ $(p+'F').addEventListener('change',async e=>{const f=e.target.files[0];if(f)$(p+'T').value=await rd(f,false)});
+ $(p+'G').addEventListener('click',async()=>{
+  const text=$(p+'T').value.trim(),link=$(p+'L').value.trim(),file=$(p+'V').files[0],msg=$(p+'M'),out=$(p+'O'),btn=$(p+'G');
+  if(!text){msg.textContent=c.empty;return}
   if(!link&&!file){msg.textContent='Please add a YouTube link or a video file.';return}
   if(link&&!/youtube\.com|youtu\.be/.test(link)){msg.textContent='Please use a YouTube link, or upload a small video file instead.';return}
   if(!link&&file.size>25*1024*1024){msg.textContent='That file is too large. Please use an unlisted YouTube link.';return}
   btn.disabled=true;out.textContent='';msg.textContent='Analyzing the lesson. This can take a few minutes…';
   try{
-   const payload={sheet:sheet,videoUrl:link||undefined,videoData:link?undefined:await rd(file,true)};
-   const r=await fetch('/api/audit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+   const payload={videoUrl:link||undefined,videoData:link?undefined:await rd(file,true)};payload[c.field]=text;
+   const r=await fetch(c.endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
    const d=await r.json().catch(()=>({}));
    if(!r.ok)throw new Error(d.error||'The check could not be completed.');
-   msg.textContent='Done. Check each suggestion against its timestamp before changing a rating.';out.textContent=d.reply.trim();
+   msg.textContent='Done. Check each point against its timestamp before relying on it.';out.textContent=d.reply.trim();
   }catch(e){msg.textContent='Could not finish: '+e.message}
   btn.disabled=false;
  });
-})();
+}
+videoPanel({p:'au',title:'Lesson audit check',intro:'Compares a filled audit sheet with the lesson recording and suggests which ratings to keep, raise or lower. A person makes the final decision.',label:'Audit sheet: paste from Google Sheets, or choose a .csv file',btn:'Check the audit',empty:'Please add the audit sheet.',endpoint:'/api/audit',field:'sheet'});
+videoPanel({p:'lp',title:'Lesson video vs. lesson plan',intro:'Compares the lesson recording with the lesson plan and shows what was done as planned, done differently, or not seen, with timestamps.',label:'Lesson plan: paste the text (from Google Docs or Sheets), or choose a .txt or .csv file',btn:'Check against the plan',empty:'Please add the lesson plan.',endpoint:'/api/plancheck',field:'plan'});
 render();renderKB();
 </script>
 </body>
